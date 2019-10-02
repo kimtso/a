@@ -1,0 +1,179 @@
+def openshiftProject
+def teamInPP
+def gitlabInPP
+def openshiftSecret='rN5Ub_h7hrs_LNcldO-OkLZZPteWF1ISlPkpHbYi1c8'
+def gitURL
+
+def orcOpenshift=https://orc.oc01.cncbi:8443
+def dev=https://dev.oc01.cncbi:8443
+def sit=https://sit.oc01.cncbi:8443
+def uat=https://uat.oc01.cncbi:8443
+def prodlike=https://pll.oc01.cncbi:8443
+def prod=https://prd.oc01.cncbi:8443
+
+
+pipeline {
+    agent {
+        label 'master' 
+    }
+	parameters{
+		booleanParam(name: 'isBackend', defaultValue: true, description: 'True for backend service, false for mobile app')
+		booleanParam(name: 'isCreateProject', defaultValue: true, description: 'True for create project in openshift, vice versa')
+		booleanParam(name: 'isCreateEnv', defaultValue: true, description: 'True for create environment project in openshift, vice versa')
+		
+		string(name: 'team', defaultValue: 'sqa,sqb')
+		string(name: 'branch', defaultValue: 'feature')
+		string(name: 'microService',defaultValue: 'backend')
+		string(name: 'app', defaultValue: 'bitinmotion')
+		string(name: 'scm_url', defaultValue: 'https://bitbucket-bitbucket.13.94.25.165.nip.io/scm/demo/good-beer-backend.git')
+	}
+    stages {
+
+		
+        stage('Create Openshift Project') {
+			when{
+				expression{
+					("${params.isCreateProject}" =~ "true")
+				}
+			}
+            steps {
+                script{
+					openshiftProject="${params.app}-${params.microService}-${params.branch}"
+					openshift.withCluster('https://13.94.25.165:8443',"${openshiftSecret}"){
+//					openshift.verbose()
+		
+					openshift.newProject("${openshiftProject}")
+					openshift.withProject("${openshiftProject}"){
+						openshift.create(readFile('devsecopseng.secret') )
+						openshift.create(readFile('jenkins-rolebinding.yaml'))
+							
+						}
+					}					
+				}
+			}
+        }
+		stage('Create Project Environment') {
+			when{
+				expression{
+					("${params.isCreateEnv}" =~ "true")
+				}
+			}
+		    steps {
+                script{
+					def tmpProject= "${params.app}-${params.microService}"
+					
+					openshift.withCluster('https://13.94.25.165:8443',"${openshiftSecret}"){
+
+						openshift.newProject("${tmpProject}-dev")
+						openshift.withProject("${tmpProject}-dev"){
+							sh "oc create secret docker-registry nexus-pro --docker-username=admin --docker-password=admin123 --docker-server=registry.rh-internal.tk -n ${tmpProject}-dev"
+							openshift.create(readFile('jenkins-rolebinding.yaml'))	
+							openshift.create(readFile('jenkins-slave-rolebinding.yaml'))
+						}
+						
+						openshift.newProject("${tmpProject}-sit")
+						openshift.withProject("${tmpProject}-sit"){
+							openshift.create(readFile('jenkins-rolebinding.yaml'))	
+							openshift.create(readFile('jenkins-slave-rolebinding.yaml'))
+						}
+						openshift.newProject("${tmpProject}-uat")
+						openshift.withProject("${tmpProject}-uat"){
+							openshift.create(readFile('jenkins-rolebinding.yaml'))	
+							openshift.create(readFile('jenkins-slave-rolebinding.yaml'))
+						}
+						openshift.newProject("${tmpProject}-prodlike")
+						openshift.withProject("${tmpProject}-prodlike"){
+							openshift.create(readFile('jenkins-rolebinding.yaml'))	
+							openshift.create(readFile('jenkins-slave-rolebinding.yaml'))
+						}
+						openshift.newProject("${tmpProject}-prod")
+						openshift.withProject("${tmpProject}-prod"){
+							openshift.create(readFile('jenkins-rolebinding.yaml'))	
+							openshift.create(readFile('jenkins-slave-rolebinding.yaml'))
+						}	
+					}				
+				}
+			}
+		}
+		
+		stage('Create Openshift Pipeline') {
+            steps {
+                script{
+					def tmp = []
+					def type
+				    teamInPP = "${params.team}"
+					tmp = teamInPP.split(',')
+					gitlabInPP = "${params.scm_url}"
+					isBackendInPP = "${params.isBackend}"
+					def tmpstr =gitlabInPP.replaceAll('/','\\\\/')
+					echo "${gitlabInPP}"
+					echo "${tmpstr}"
+					echo '''
+					###############################
+					#     Remove old directory    #
+					###############################
+					'''
+					sh "rm -rf ${params.app}-${params.microService}"
+
+					
+					if(isBackendInPP =~"true")
+						type = "backend"
+					else
+						type = "app"
+
+					sh " sed -i 's/@@@branch@@@/${params.branch}/g' ${type}-bc.yaml" 
+					sh " sed -i 's/@@@branch@@@/${params.branch}/g' ${type}.jenkinsfile" 
+					sh " sed -i 's/@@@app@@@/${params.app}/g' ${type}-bc.yaml"
+					sh " sed -i 's/@@@app@@@/${params.app}/g' ${type}.jenkinsfile"
+					sh " sed -i 's/@@@microService@@@/${params.microService}/g' ${type}-bc.yaml"
+					sh " sed -i 's/@@@microService@@@/${params.microService}/g' ${type}.jenkinsfile"
+					sh " sed -i \"s/@@@scm_url@@@/${tmpstr}/g\" ${type}.jenkinsfile"
+					sh "cp ${type}-bc.yaml ${type}-bc.yaml.bak"		
+
+
+					openshiftProject="${params.app}-${params.microService}-${params.branch}"
+					sh "cat ${type}-bc.yaml"				
+
+
+					
+					for( int i =0 ; i< tmp.size();i++){
+						echo "current team = ${tmp[i]}, current type = ${type}"
+						
+						sh " sed -i 's/@@@team@@@/${tmp[i]}/g' ${type}-bc.yaml"
+						
+						sh "cat ${type}-bc.yaml"
+						openshift.withCluster('https://13.94.25.165:8443',"${openshiftSecret}"){
+							openshift.withProject("${openshiftProject}"){
+								if(type == "backend")
+									openshift.create(readFile('backend-bc.yaml'))
+								if(type == "app")
+									openshift.create(readFile('app-bc.yaml'))							}
+						}
+						sh "cp -f ${type}-bc.yaml.bak ${type}-bc.yaml"
+					}
+					//git
+					withCredentials([usernamePassword(credentialsId: 'jenkins-bitbucket', passwordVariable:'GIT_PASSWORD', usernameVariable:'GIT_USERNAME') ]   ){
+						dir("${WORKSPACE}/${params.app}-${params.microService}"){
+							//sh "git pull https://${GIT_USERNAME}:${GIT_PASSWORD}@bitbucket-bitbucket.13.94.25.165.nip.io/scm/dso/onboarding.git"
+	//						sh "mkdir ${params.microService}" 
+							sh "cp -f ../${type}.jenkinsfile ./${type}-${params.branch}.jenkinsfile"
+							
+	//						sh "git add ${params.microService}"
+
+							sh "git add . "
+							sh "git config --global user.email 'ktso@redhat.com'"
+							sh "git config --global user.name 'devopseng'"
+							sh "git config --global push.default simple"
+							sh "git commit -m ${params.microService}"
+							sh "git push -f https://${GIT_USERNAME}:${GIT_PASSWORD}@bitbucket-bitbucket.13.94.25.165.nip.io/scm/dso/onboarding.git HEAD:master"
+						}
+					}
+
+				}
+				
+				
+			}
+        }
+
+    }
+}

@@ -1,0 +1,13 @@
+apiVersion: authorization.openshift.io/v1
+groupNames: null
+kind: RoleBinding
+metadata:
+  name: jenkins-jenkins
+roleRef:
+  name: edit
+subjects:
+- kind: ServiceAccount
+  name: jenkins
+  namespace: ci
+userNames:
+- system:serviceaccount:ci:jenkins

@@ -1,0 +1,19 @@
+apiVersion: build.openshift.io/v1
+kind: BuildConfig 
+metadata:
+  name: @@@branch@@@-@@@team@@@
+  namespace: @@@app@@@-@@@microService@@@-@@@branch@@@
+spec:
+  failedBuildsHistoryLimit: 5
+  runPolicy: Serial
+  source:
+    git:
+      ref: master
+      uri: https://bitbucket-bitbucket.13.94.25.165.nip.io/scm/dso/onboarding.git
+    sourceSecret:
+      name: devsecopseng
+    type: Git
+  strategy:
+    jenkinsPipelineStrategy:
+      jenkinsfilePath: @@@app@@@-@@@microService@@@/app-@@@branch@@@.jenkinsfile
+    type: JenkinsPipeline
