@@ -1,0 +1,231 @@
+def openshiftProject
+def teamInPP
+def scmInPP
+def branchInPP
+def tmpBranch = []
+def openshiftSecret='NgWGYDOXxHzlnhIaONDePHqNrrSTQj43AwopNk6wQ-Q'
+pipeline {
+    agent {
+        label 'master' 
+    }
+
+	parameters{
+	
+		booleanParam(name: 'isBackend', defaultValue: true, description: 'True for backend service, false for mobile app')
+		booleanParam(name: 'isCreateProject', defaultValue: true, description: 'True for create project in openshift, vice versa')
+		booleanParam(name: 'isCreateEnv', defaultValue: true, description: 'True for create environment project in openshift, vice versa')
+		
+		string(name: 'module', defaultValue: '')
+		string(name: 'team', defaultValue: 'sqa,sqb')
+		string(name: 'branch', defaultValue: 'feature,develop,release,hotfix')
+		string(name: 'microService',defaultValue: 'backend')
+		string(name: 'app', defaultValue: 'bitinmotion')
+		string(name: 'scm_url', defaultValue: 'https://bitbucket-bitbucket.13.94.25.165.nip.io/scm/demo/good-beer-backend.git')
+	}
+    stages {
+//Need  to ensure jenkins-slave serivce account to be added self-provisioner cluster-role 
+//pre-configuration in oc binary
+        stage('Create Openshift Project') {
+			when{
+				expression{
+					("${params.isCreateProject}" =~ "true")
+				}
+			}
+            steps {
+                script{
+					
+					branchInPP = "${params.branch}"
+					tmpBranch = branchInPP.split(',')
+
+
+					for(int i=0; i<tmpBranch.size(); i++){
+					
+				
+//					openshiftProject="${params.app}-${params.microService}-${params.branch}"
+					openshiftProject="${params.app}-${params.microService}-"
+					openshiftProject+=tmpBranch[i]
+
+					openshift.withCluster('SIT',"fake-jenkins-slave"){
+//						openshift.verbose(
+						openshift.newProject("${openshiftProject}")
+						openshift.withProject("${openshiftProject}"){
+							openshift.create(readFile('devsecopseng.secret') )
+							openshift.create(readFile('jenkins-rolebinding.yaml'))
+								
+							}
+						}
+					}					
+				}
+			}
+        }
+		stage('Create Project Environment') {
+			when{
+				expression{
+					("${params.isCreateEnv}" =~ "true")
+				}
+			}
+		    steps {
+                script{
+					def tmpProject= "${params.app}-${params.microService}"
+					
+					openshift.withCluster('SIT',"fake-jenkins-slave"){
+	//					openshift.verbose()
+			
+						openshift.newProject("${tmpProject}-dev")
+						openshift.withProject("${tmpProject}-dev"){
+							sh "oc create secret docker-registry nexus-pro --docker-username=admin --docker-password=admin123 --docker-server=registry.rh-internal.tk -n ${tmpProject}-dev"
+							openshift.create(readFile('jenkins-rolebinding.yaml'))	
+							openshift.create(readFile('jenkins-slave-rolebinding.yaml'))
+						}
+						
+						openshift.newProject("${tmpProject}-sit")
+						openshift.withProject("${tmpProject}-sit"){
+							openshift.create(readFile('jenkins-rolebinding.yaml'))	
+							openshift.create(readFile('jenkins-slave-rolebinding.yaml'))
+						}
+						openshift.newProject("${tmpProject}-uat")
+						openshift.withProject("${tmpProject}-uat"){
+							openshift.create(readFile('jenkins-rolebinding.yaml'))	
+							openshift.create(readFile('jenkins-slave-rolebinding.yaml'))
+						}
+						openshift.newProject("${tmpProject}-prodlike")
+						openshift.withProject("${tmpProject}-prodlike"){
+							openshift.create(readFile('jenkins-rolebinding.yaml'))	
+							openshift.create(readFile('jenkins-slave-rolebinding.yaml'))
+						}
+						openshift.newProject("${tmpProject}-prod")
+						openshift.withProject("${tmpProject}-prod"){
+							openshift.create(readFile('jenkins-rolebinding.yaml'))	
+							openshift.create(readFile('jenkins-slave-rolebinding.yaml'))
+						}	
+					}				
+				}
+			}
+		}
+		
+		stage('Create Openshift Pipeline') {
+            steps {
+                script{
+					def tmpTeam = []
+					//def tmpBranch = []
+					def type
+				    teamInPP = "${params.team}"
+					branchInPP = "${params.branch}"
+					tmpTeam = teamInPP.split(',')
+					tmpBranch = branchInPP.split(',')
+					scmInPP = "${params.scm_url}"
+					isBackendInPP = "${params.isBackend}"
+					def tmpstr =scmInPP.replaceAll('/','\\\\/')
+					
+					echo "${scmInPP}"
+					echo "${tmpstr}"
+					
+					echo '''
+					###############################
+					#     Remove old directory    #
+					###############################'''
+					
+					sh "rm -rf ${params.app}-${params.microService}"
+
+					
+					if(isBackendInPP =~"true")
+						type = "backend"
+					else
+						type = "app"
+
+//					sh " sed -i 's/@@@branch@@@/${params.branch}/g' ${type}-bc.yaml" 
+//					sh " sed -i 's/@@@branch@@@/${params.branch}/g' ${type}.jenkinsfile" 
+					sh " sed -i 's/@@@app@@@/${params.app}/g' ${type}-bc.yaml"
+					sh " sed -i 's/@@@app@@@/${params.app}/g' ${type}.jenkinsfile"
+					sh " sed -i 's/@@@microService@@@/${params.microService}/g' ${type}-bc.yaml"
+					sh " sed -i 's/@@@microService@@@/${params.microService}/g' ${type}.jenkinsfile"
+					sh " sed -i \"s/@@@scm_url@@@/${tmpstr}/g\" ${type}.jenkinsfile"
+					sh "cp ${type}-bc.yaml ${type}-bc.yaml.bak"		
+					//20191021
+					sh "cp ${type}.jenkinsfile ${type}.jenkinsfile.bak"
+
+					
+					sh "cat ${type}-bc.yaml"				
+
+
+//echo "###print branch name###"
+//for(int j=0; j<tmpBranch.size(); j++){
+//	echo tmpBranch[j]
+//}
+
+					//create pipeline
+					for(int i =0 ; i< tmpBranch.size();i++){
+						echo "current branch= ${tmpBranch[i]}, current type = ${type}"
+						
+						sh " sed -i 's/@@@branch@@@/${tmpBranch[i]}/g' ${type}-bc.yaml" 
+						sh " sed -i 's/@@@branch@@@/${tmpBranch[i]}/g' ${type}.jenkinsfile"
+						openshiftProject="${params.app}-${params.microService}-"
+						openshiftProject+=tmpBranch[i]
+						echo "outside ${tmpBranch[i]}"
+						
+						if(tmpBranch[i] == "feature"){
+							innerLoop:
+							for(int j=0; j<tmpTeam.size(); j++){
+								//### team
+								echo "inside team ${tmpBranch[i]}"
+								
+								
+								if(tmpBranch[i] == "feature"){
+									sh " sed -i 's/@@@team@@@/${tmpTeam[j]}/g' ${type}-bc.yaml"
+								}
+								else
+									sh " sed -i 's/-@@@team@@@//g' ${type}-bc.yaml"
+								//### end team
+								sh " sed -i 's/@@@branch@@@/${tmpBranch[i]}/g' ${type}-bc.yaml" 	
+								
+								sh "cat ${type}-bc.yaml"
+								echo "test: ${type}"
+								echo "branch: ${tmpBranch[i]}"
+								echo "${openshiftProject}"
+								
+								openshift.withCluster('SIT',"fake-jenkins-slave"){
+									openshift.withProject("${openshiftProject}"){
+										if(type == "backend")
+											openshift.create(readFile('backend-bc.yaml'))
+										if(type == "app")
+											openshift.create(readFile('app-bc.yaml'))							
+									}
+								}
+								sh "cp -f ${type}-bc.yaml.bak ${type}-bc.yaml"
+							}
+						}
+						echo "${tmpBranch[i]}"
+						if(tmpBranch[i]!="feature"){
+							
+							sh " sed -i 's/-@@@team@@@//g' ${type}-bc.yaml"
+						
+							openshift.withCluster('SIT',"fake-jenkins-slave"){
+								openshift.withProject("${openshiftProject}"){
+									if(type == "backend")
+										openshift.create(readFile('backend-bc.yaml'))
+									if(type == "app")
+										openshift.create(readFile('app-bc.yaml'))							
+								}
+							}
+						}
+						withCredentials([usernamePassword(credentialsId: 'jenkins-bitbucket', passwordVariable:'GIT_PASSWORD', usernameVariable:'GIT_USERNAME') ]   ){
+//								dir("${WORKSPACE}/${params.app}-${params.microService}-${tmpBranch[i]}"){
+								dir("${WORKSPACE}/${params.app}-${params.microService}"){
+									sh "cp -f ../${type}.jenkinsfile ./${type}-${tmpBranch[i]}.jenkinsfile"
+									sh "git add . "
+									sh "git config --global user.email 'ktso@redhat.com'"
+									sh "git config --global user.name 'devopseng'"
+									sh "git config --global push.default simple"
+									sh "git commit -m ${params.microService}"
+									sh "git push -f https://${GIT_USERNAME}:${GIT_PASSWORD}@bitbucket-bitbucket.13.94.25.165.nip.io/scm/dso/onboarding.git HEAD:master"
+							}
+						}
+						sh "cp -f ${type}-bc.yaml.bak ${type}-bc.yaml"
+						sh "cp -f ${type}.jenkinsfile.bak ${type}.jenkinsfile"	
+					}
+				}
+			}
+        }
+
+    }
+}
